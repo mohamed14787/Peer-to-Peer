@@ -14,13 +14,20 @@ def run_simulation(manager):
     # Example messages between peers
     
     manager.send_message("3osa", message=1, ttl=2)
-    time.sleep(1)
-    manager.send_message("shaarawy", message=2, ttl=2)
-    time.sleep(1)
-    manager.send_message("ghobashy", message=3, ttl=2)
-    time.sleep(1)
-    manager.send_message("3osa", message=4, ttl=2)
-    time.sleep(1)
+    time.sleep(4)
+    manager.send_message("3osa", message=3, ttl=4)
+    time.sleep(4)
+    manager.send_message("3osa", message=5, ttl=6)
+    time.sleep(4)
+   
+    
+    
+   
+   
+
+
+
+    
     
    
    

@@ -4,9 +4,10 @@ import json
 
 # Sample list of peers (could be dynamically updated)
 PEERS = [
-    {"name": "ghobashy ", "host": "127.0.0.1", "port": 1223},
+    
     {"name": "shaarawy", "host": "127.0.0.1", "port": 3145},
-    {"name": "3osa", "host": "127.0.0.1", "port": 9321}
+    {"name": "3osa", "host": "127.0.0.1", "port": 9321},
+    {"name": "ghobashy ", "host": "127.0.0.1", "port": 1223},
 ]
 
 def handle_client(conn):

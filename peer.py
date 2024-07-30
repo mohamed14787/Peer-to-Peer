@@ -25,7 +25,6 @@ class Peer:
         self.rate_limit_window = 60  # 60 seconds time window
         self.message_limit = 10  # limit to 10 messages per window
         self.message_timestamps = deque()  # to store timestamps of sent messages
-        self.messages=deque()
 
 
         # Start listening for incoming connections
@@ -47,18 +46,18 @@ class Peer:
             print(f"Error in listen_for_connections: {e}")
 
     def handle_client(self, conn):
-        try:
-            data = conn.recv(1024).decode()
-            if data:
-                try:
-                    message, ttl = data.split("|")
-                    print(f"{self.name} received message: {message} with TTL: {ttl}")
-                except ValueError:
-                    print(f"Received malformed message: {data}")
-        except Exception as e:
-            print(f"Error handling client: {e}")
-        finally:
-            conn.close()
+      
+            try:
+                data = conn.recv(1024).decode()
+                if data:
+                    try:
+                        message, ttl = data.split("|")
+                        print(f"{self.name} received message: {message} with TTL: {ttl}")
+                    except ValueError:
+                        print(f"Received malformed message: {data}")
+            except Exception as e:
+                print(f"Error handling client: {e}")
+            
 
     def receive_messages(self, peer_name, peer_socket):
         while True:
@@ -66,21 +65,23 @@ class Peer:
                 data = peer_socket.recv(1024).decode()
                 if data:
                     try:
-                        # if(not message in self.messages):
-                            message, ttl = data.split("|")
-                            print(f"{self.name} received message from {peer_name}: {message} with TTL: {ttl}")
-                            self.messages.append(message)
-                            self.send_message(message,ttl-1)
+                        message, ttl = data.split("|")
+                        print(f"{self.name} received message from {peer_name}: {message} with TTL: {ttl}")
+
                     except ValueError:
                         print(f"Received malformed message from {peer_name}: {data}")
             except Exception as e:
-                print(f"Error receiving message from {peer_name}: {e}")
+                print(f" {self.name}Error receiving message from {peer_name}: {e}")
                 break
+           
 
     def connect(self, peer_name, peer_host, peer_port):
         if (peer_name, peer_host, peer_port) not in [(name, p_host, p_port) for name, (p_host, p_port, p_socket) in self.connections.items()]:
             try:
                 peer_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                peer_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                peer_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 60)
+                peer_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
                 peer_socket.connect((peer_host, peer_port))
                 self.connections[peer_name] = (peer_host, peer_port, peer_socket)
                 print(f"{self.name} connected to peer: {peer_name} at {peer_host}:{peer_port}")
@@ -96,12 +97,12 @@ class Peer:
         if len( self.connections)>0:
             try:
                 for recipient in self.connections.values():
+                    print(self.connections.values())
                     
                     recipient_host, recipient_port, recipient_socket =  recipient
-                    print(f"recipient_host:{recipient_host} recipient_port:{recipient_port} recipient_socket:{recipient_socket}")
                     full_message = f"{message}|{ttl}"
                     recipient_socket.sendall(full_message.encode())
-                    print(f"{self.name} sent message to {recipient}: {message} with TTL: {ttl}")
+                    print(f"{self.name} sent message to {recipient_port} : {message} with TTL: {ttl}")
                     self.message_timestamps.append(time.time())
 
             except Exception as e:

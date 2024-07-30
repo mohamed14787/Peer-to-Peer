@@ -5,6 +5,7 @@ from peer import Peer
 import hashlib
 import random
 import time
+import asyncio
 
 class GossipManager:
     def __init__(self, bootstrap_host='127.0.0.1', bootstrap_port=2050,degree=3,cacheSize=5):
@@ -25,7 +26,7 @@ class GossipManager:
                 print(f"Initial peers obtained: {peers_info}")
                 
                 for peer_info in peers_info:
-                    self.add_peer(peer_info["name"], peer_info["host"], peer_info["port"])
+                     self.add_peer(peer_info["name"], peer_info["host"], peer_info["port"])
                 for peer in self.peers:
                     for peer2 in self.peers:
                         if peer != peer2:
@@ -44,6 +45,7 @@ class GossipManager:
                 if self.verify_pow_solution(x, challenge, difficulty)== True:
                     
                   self.peers[name] = new_peer
+            
                 
                   print(f"Added new peer: {name} at {host}:{port}")
             except Exception as e:
