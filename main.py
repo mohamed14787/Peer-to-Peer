@@ -13,12 +13,12 @@ def create_network():
 def run_simulation(manager):
     # Example messages between peers
     
-    manager.send_message("3osa", message=1, ttl=2)
-    time.sleep(4)
-    manager.send_message("3osa", message=3, ttl=4)
-    time.sleep(4)
+    manager.send_message("ghobashy", message=1, ttl=2)
+    manager.send_message("shaarawy", message=3, ttl=4)
     manager.send_message("3osa", message=5, ttl=6)
-    time.sleep(4)
+    time.sleep(5)
+   
+   
    
     
     

@@ -19,7 +19,7 @@ class Peer:
         self.port = port
         self.degree=degree
         self.cacheSize=cacheSize
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.connections = {}  # Dictionary to store connected peers
         self.degree=degree
         self.rate_limit_window = 60  # 60 seconds time window
@@ -36,11 +36,10 @@ class Peer:
     def listen_for_connections(self):
         try:
             self.socket.bind((self.host, self.port))
-            self.socket.listen(5)
             print(f"{self.name} is listening on {self.host}:{self.port}")
 
             while True:
-                conn, addr = self.socket.accept()
+                conn, addr = self.socket.recvfrom(1024)
                 threading.Thread(target=self.handle_client, args=(conn,), daemon=True).start()
         except Exception as e:
             print(f"Error in listen_for_connections: {e}")
@@ -48,7 +47,7 @@ class Peer:
     def handle_client(self, conn):
       
             try:
-                data = conn.recv(1024).decode()
+                data = conn.decode()
                 if data:
                     try:
                         message, ttl = data.split("|")
@@ -59,34 +58,29 @@ class Peer:
                 print(f"Error handling client: {e}")
             
 
-    def receive_messages(self, peer_name, peer_socket):
-        while True:
-            try:
-                data = peer_socket.recv(1024).decode()
-                if data:
-                    try:
-                        message, ttl = data.split("|")
-                        print(f"{self.name} received message from {peer_name}: {message} with TTL: {ttl}")
+    # def receive_messages(self, peer_name):
+    #     while True:
+    #         try:
+    #             data, addr = self.socket.recvfrom(1024)
+    #             if data:
+    #                 try:
+    #                     message, ttl = data.decode().split("|")
+    #                     print(f"{self.name} received message from {peer_name}: {message} with TTL: {ttl}")
 
-                    except ValueError:
-                        print(f"Received malformed message from {peer_name}: {data}")
-            except Exception as e:
-                print(f" {self.name}Error receiving message from {peer_name}: {e}")
-                break
+    #                 except ValueError:
+    #                     print(f"Received malformed message from {peer_name}: {data}")
+    #         except Exception as e:
+    #             print(f" {self.name}Error receiving message from {peer_name}: {e}")
+    #             break
            
 
     def connect(self, peer_name, peer_host, peer_port):
-        if (peer_name, peer_host, peer_port) not in [(name, p_host, p_port) for name, (p_host, p_port, p_socket) in self.connections.items()]:
+        if (peer_name, peer_host, peer_port) not in [(name, p_host, p_port) for name, (p_host, p_port) in self.connections.items()]:
             try:
-                peer_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                peer_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                peer_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 60)
-                peer_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
-                peer_socket.connect((peer_host, peer_port))
-                self.connections[peer_name] = (peer_host, peer_port, peer_socket)
+                
+                self.connections[peer_name] = (peer_host, peer_port)
                 print(f"{self.name} connected to peer: {peer_name} at {peer_host}:{peer_port}")
 
-                threading.Thread(target=self.receive_messages, args=(peer_name, peer_socket), daemon=True).start()
             except Exception as e:
                 print(f"Failed to connect to peer {peer_name} at {peer_host}:{peer_port}: {e}")
 
@@ -96,19 +90,16 @@ class Peer:
             return
         if len( self.connections)>0:
             try:
-                for recipient in self.connections.values():
-                    print(self.connections.values())
-                    
-                    recipient_host, recipient_port, recipient_socket =  recipient
+                for peer_name, (recipient_host, recipient_port) in self.connections.items():
                     full_message = f"{message}|{ttl}"
-                    recipient_socket.sendall(full_message.encode())
-                    print(f"{self.name} sent message to {recipient_port} : {message} with TTL: {ttl}")
+                    self.socket.sendto(full_message.encode(), (recipient_host, recipient_port))
+                    print(f"{self.name} sent message to {recipient_host}:{recipient_port}: {message} with TTL: {ttl}")
                     self.message_timestamps.append(time.time())
 
             except Exception as e:
-                print(f"Failed to send message to {recipient}: {e}")
+                print(f"Failed to send message to {recipient_port}: {e}")
         else:
-            print(f"Peer {recipient} is not connected to {self.name}")
+            print(f"Peer {recipient_port} is not connected to {self.name}")
             
     def check_rate_limit(self):
         current_time = time.time()
