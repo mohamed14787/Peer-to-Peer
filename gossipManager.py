@@ -74,12 +74,12 @@ class GossipManager:
             if hash.startswith(prefix):
                 return attempt
             counter += 1
-    def send_message(self, sender_name, message, ttl):
+    async def send_message(self, sender_name, message, ttl):
         try:
             sender=self.peers[sender_name]
             
        # if any(sender_name == peer.name for peer in self.peers.values())  and any(recipient_name == peer.name for peer in self.peers.values):
-            sender.send_message(message, ttl)
+            await sender.send_message(message, ttl)
        # else:
         except Exception as e:
           print(f"One or both peers not found: {sender_name} , {e}")

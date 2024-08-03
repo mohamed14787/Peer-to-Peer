@@ -8,6 +8,19 @@ import time
 import random
 from collections import deque
 import asyncio
+import nanoid
+
+
+GOSSIP_ADDR = 'localhost'
+GOSSIP_PORT = 7001
+
+GOSSIP_ANNOUNCE = 500
+GOSSIP_NOTIFY = 501
+GOSSIP_NOTIFICATION = 502
+GOSSIP_VALIDATION = 503
+
+from util import bad_packet, read_message, handle_client
+
 
 
 
@@ -20,58 +33,76 @@ class Peer:
         self.degree=degree
         self.cacheSize=cacheSize
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.setblocking(False)
+
         self.connections = {}  # Dictionary to store connected peers
         self.degree=degree
         self.rate_limit_window = 60  # 60 seconds time window
         self.message_limit = 10  # limit to 10 messages per window
         self.message_timestamps = deque()  # to store timestamps of sent messages
+        self.dataTypes_to_modules = {}
 
 
         # Start listening for incoming connections
-        threading.Thread(target=self.listen_for_connections, daemon=True).start()
-        
+        asyncio.create_task(self.listen_for_connections())        
         
   
 
-    def listen_for_connections(self):
-        try:
-            self.socket.bind((self.host, self.port))
-            print(f"{self.name} is listening on {self.host}:{self.port}")
+    # def listen_for_connections(self):
+    #     try:
+    #         self.socket.bind((self.host, self.port))
+    #         print(f"{self.name} is listening on {self.host}:{self.port}")
 
-            while True:
-                conn, addr = self.socket.recvfrom(1024)
-                threading.Thread(target=self.handle_client, args=(conn,), daemon=True).start()
-        except Exception as e:
-            print(f"Error in listen_for_connections: {e}")
+    #         while True:
+    #             conn, addr = self.socket.recvfrom(1024)
+    #             threading.Thread(target=self.handle_client, args=(conn,), daemon=True).start()
+                
+            
+    #     except Exception as e:
+    #         print(f"Error in listen_for_connections: {e}")
+    
+    async def listen_for_connections(self):
+        self.socket.bind((self.host, self.port))
+        print(f"{self.name} is listening on {self.host}:{self.port}")
 
-    def handle_client(self, conn):
-      
+        while True:
             try:
-                data = conn.decode()
-                if data:
+                conn, addr = await asyncio.get_event_loop().run_in_executor(None, self.socket.recvfrom, 1024)
+                print(f"Received data from {addr}:")  # Print received data for debugging
+                asyncio.create_task(self.handle_message(conn,))
+            except BlockingIOError:
+                await asyncio.sleep(0.1)
+
+
+    # def handle_client(self, conn):
+      
+    #         try:
+    #             data = conn.decode()
+    #             if data:
+    #                 try:
+    #                     message, ttl = data.split("|")
+    #                     print(f"{self.name} received message: {message} with TTL: {ttl}")
+    #                 except ValueError:
+    #                     print(f"Received malformed message: {data}")
+    #         except Exception as e:
+    #             print(f"Error handling client: {e}")
+    
+    async def handle_message(self, conn):
+        try:
+             # Deserialize using your Message class
+            data=conn.decode()
+            if data:
                     try:
+                        
                         message, ttl = data.split("|")
                         print(f"{self.name} received message: {message} with TTL: {ttl}")
                     except ValueError:
                         print(f"Received malformed message: {data}")
-            except Exception as e:
-                print(f"Error handling client: {e}")
+        except Exception as e:
+                        print(f"Error handling client: {e}")           
             
 
-    # def receive_messages(self, peer_name):
-    #     while True:
-    #         try:
-    #             data, addr = self.socket.recvfrom(1024)
-    #             if data:
-    #                 try:
-    #                     message, ttl = data.decode().split("|")
-    #                     print(f"{self.name} received message from {peer_name}: {message} with TTL: {ttl}")
-
-    #                 except ValueError:
-    #                     print(f"Received malformed message from {peer_name}: {data}")
-    #         except Exception as e:
-    #             print(f" {self.name}Error receiving message from {peer_name}: {e}")
-    #             break
+    
            
 
     def connect(self, peer_name, peer_host, peer_port):
@@ -84,7 +115,7 @@ class Peer:
             except Exception as e:
                 print(f"Failed to connect to peer {peer_name} at {peer_host}:{peer_port}: {e}")
 
-    def send_message(self, message, ttl):
+    async def send_message(self, message, ttl):
         if not self.check_rate_limit():
             print(f"Rate limit exceeded. Message to {recipient_host}:{recipient_port} not sent.")
             return
@@ -93,6 +124,7 @@ class Peer:
                 for peer_name, (recipient_host, recipient_port) in self.connections.items():
                     full_message = f"{message}|{ttl}"
                     self.socket.sendto(full_message.encode(), (recipient_host, recipient_port))
+
                     print(f"{self.name} sent message to {recipient_host}:{recipient_port}: {message} with TTL: {ttl}")
                     self.message_timestamps.append(time.time())
 
@@ -113,6 +145,33 @@ class Peer:
         else:
             print(f"Rate limit exceeded. Message not sent.")
             return False
+        
+    def generate_mid(message):
+        return nanoid.generate(size=10,alphabet=message)
+    
+    
+    # async def handle_message(buf, reader, writer):
+    #     ret = False
+    #     header = buf[:4]
+    #     body = buf[4:]
+
+    #     mtype = struct.unpack(">HH", header)[1]
+    #     if mtype == GOSSIP_ANNOUNCE:
+    #         ret = await handle_gossip_announce(buf, reader, writer)
+    #     elif mtype == GOSSIP_NOTIFY:
+    #         ret = await handle_gossip_notify(buf, reader, writer)
+    #     elif mtype == GOSSIP_NOTIFICATION:
+    #         await bad_packet(reader, writer,
+    #                         f"Received illegal GOSSIP_NOTIFICATION from client.",
+    #                         header)
+    #     elif mtype == GOSSIP_VALIDATION:
+    #         ret = await handle_gossip_validation(buf, reader, writer)
+    #     else:
+    #         await bad_packet(reader, writer,
+    #                         f"Unknown message type {mtype} received",
+    #                         header)
+    #     return ret
+
 
 
 # class Peer:
