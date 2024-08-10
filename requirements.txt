@@ -1,3 +1,13 @@
-hexdump
-rsa
-pycryptodome
+certifi==2024.7.4
+charset-normalizer==3.3.2
+docker==7.1.0
+hexdump==3.3
+idna==3.7
+nanoid==2.0.0
+pyasn1==0.6.0
+pycryptodome==3.20.0
+python-consul==1.1.0
+requests==2.32.3
+rsa==4.9
+six==1.16.0
+urllib3==2.2.2

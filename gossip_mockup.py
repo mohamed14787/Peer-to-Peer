@@ -205,33 +205,7 @@ async def handle_gossip_notify(buf, reader, writer):
     print(f"[+] {raddr}:{rport} >>> GOSSIP_NOTIFY registered: ({dtype})")
     return True
 
-async def handle_gossip_validation(buf, reader, writer):
-    raddr, rport = writer.get_extra_info('socket').getpeername()
-    header = buf[:4]
-    body = buf[4:]
 
-    msize = struct.unpack(">HH", header)[0]
-
-    if msize != 8 or msize != len(buf):
-        await bad_packet(reader, writer,
-                         reason="Invalid size for GOSSIP_VALIDATION",
-                         data=buf,
-                         cleanup_func=clear_state)
-        return False
-
-    mid, res, valid = struct.unpack(">HBB", body)
-    valid = True if valid > 0 else False
-
-    print(f"[+] {raddr}:{rport} >>> GOSSIP_VALIDATION: ({mid}:{valid})")
-
-    if not await update_validation_state((reader,writer), mid, valid):
-        await bad_packet(reader, writer,
-                         reason="GOSSIP_VALIDATION for nonexisting subscription",
-                         data=buf,
-                         cleanup_func=clear_state)
-        return False
-
-    return True
 
 async def handle_message(buf, reader, writer):
     ret = False

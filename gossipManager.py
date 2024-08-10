@@ -6,6 +6,7 @@ import hashlib
 import random
 import time
 import asyncio
+import argparse
 
 class GossipManager:
     def __init__(self, bootstrap_host='127.0.0.1', bootstrap_port=2050,degree=3,cacheSize=5):
@@ -14,9 +15,8 @@ class GossipManager:
         self.peers = {}
 
         # Start the bootstrapping service connection
-        self.connect_to_bootstrap_service()
 
-    def connect_to_bootstrap_service(self):
+    async def connect_to_bootstrap_service(self):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((self.bootstrap_host, self.bootstrap_port))
@@ -26,21 +26,22 @@ class GossipManager:
                 print(f"Initial peers obtained: {peers_info}")
                 
                 for peer_info in peers_info:
-                     self.add_peer(peer_info["name"], peer_info["host"], peer_info["port"])
-                for peer in self.peers:
-                    for peer2 in self.peers:
-                        if peer != peer2:
-                            self.peers[peer].connect(self.peers[peer2].name, self.peers[peer2].host, self.peers[peer2].port),
-                            self.peers[peer2].connect(self.peers[peer].name, self.peers[peer].host, self.peers[peer].port)
-                print(self.peers)
+                     await self.add_peer(peer_info["name"], peer_info["host"], peer_info["port"])
+                # for peer in self.peers:
+                #     for peer2 in self.peers:
+                #         if peer != peer2:
+                #             await self.peers[peer].connect(self.peers[peer2].name, self.peers[peer2].host, self.peers[peer2].port),
+                #             await self.peers[peer2].connect(self.peers[peer].name, self.peers[peer].host, self.peers[peer].port)
+                # print(self.peers)
         except Exception as e:
             print(f"Failed to connect to bootstrapping service: {e}")
 
-    def add_peer(self, name, host, port):
+    async def add_peer(self, name, host, port):
         if name not in self.peers:
             try:
                 challenge, difficulty = self.generate_pow_challenge(3)
                 new_peer = Peer(name, host=host, port=port)
+                await asyncio.sleep(1)
                 x=self.solve_pow_challenge(challenge, difficulty)
                 if self.verify_pow_solution(x, challenge, difficulty)== True:
                     
@@ -83,4 +84,49 @@ class GossipManager:
        # else:
         except Exception as e:
           print(f"One or both peers not found: {sender_name} , {e}")
+          
+          
+          
+    async def main(self):
+            print("Starting Gossip Manager...")
+            await self.connect_to_bootstrap_service()
+            while True:
+                command = input("> ").split()  # Get command from user
+                if command[0] == "add_peer" and len(command) == 4:
+                    try:
+                        name, host, port = command[1:]
+                        port = int(port)  # Convert port to integer
+                        await self.add_peer(name, host, port)
+                    except ValueError:
+                        print("Invalid port number. Please enter an integer.")
+                elif command[0] == "send_message" and len(command) >= 4:
+                    try:
+                        sender_name, message = command[1:3]
+                        ttl = int(command[3]) if len(command) > 3 else 1  # Default TTL to 1
+                        await self.send_message(sender_name, message, ttl)
+                    except ValueError:
+                        print("Invalid TTL. Please enter an integer.")
+                elif command[0] == "exit":
+                    break
+                else:
+                    print("Invalid command. Use 'add_peer <name> <host> <port>', 'send_message <sender> <recipient> <message> [ttl]', or 'exit'.")
+                await asyncio.sleep(1)  # Adjust as needed
+                
+                
+               
+if __name__ == "__main__":
+    usage_string = ("Run a GOSSIP module mockup with local info exchange.\n\n"
+                    + "Multiple API clients can connect to this same instance.")
 
+    cmd = argparse.ArgumentParser(description=usage_string)
+    cmd.add_argument("-a", "--address", 
+ default="127.0.0.1",  
+                     help="Bind server to this address")
+    cmd.add_argument("-p", "--port", type=int, default=2050, 
+                     help="Bind server to this port")
+    args = cmd.parse_args()
+    
+    
+
+    gossip_manager = GossipManager(bootstrap_host=args.address, bootstrap_port=args.port)
+    asyncio.run(gossip_manager.main()) 

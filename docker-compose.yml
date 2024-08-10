@@ -1,0 +1,52 @@
+version: "3"
+services:
+  consul:
+    image: consul:1.14.0
+    ports:
+      - "8500:8500"
+    command: consul agent -dev -client=0.0.0.0
+    networks:
+      - mynetwork
+
+  peer1:
+    build: .
+    environment:
+      - PEER_NAME=peer1
+      - HOST=peer1
+      - PORT=2000
+      - CONSUL_HOST=consul
+      - CONSUL_PORT=8500
+    networks:
+      - mynetwork
+    depends_on:
+      - consul
+
+  peer2:
+    build: .
+    environment:
+      - PEER_NAME=peer2
+      - HOST=peer2
+      - PORT=5000
+      - CONSUL_HOST=consul
+      - CONSUL_PORT=8500
+    networks:
+      - mynetwork
+    depends_on:
+      - consul
+
+  peer3:
+    build: .
+    environment:
+      - PEER_NAME=peer3
+      - HOST=peer3
+      - PORT=3000
+      - CONSUL_HOST=consul
+      - CONSUL_PORT=8500
+    networks:
+      - mynetwork
+    depends_on:
+      - consul
+
+networks:
+  mynetwork:
+    driver: bridge

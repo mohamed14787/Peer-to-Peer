@@ -9,24 +9,26 @@ import random
 from collections import deque
 import asyncio
 import nanoid
+import struct
+import consul
+import os
 
-
-GOSSIP_ADDR = 'localhost'
-GOSSIP_PORT = 7001
 
 GOSSIP_ANNOUNCE = 500
 GOSSIP_NOTIFY = 501
 GOSSIP_NOTIFICATION = 502
 GOSSIP_VALIDATION = 503
-
 from util import bad_packet, read_message, handle_client
 
 
 
 
 
+
+
+
 class Peer:
-    def __init__(self, name,degree=5,cacheSize=10, host='127.0.0.1', port=5000):
+    def __init__(self, name,degree=5,cacheSize=10, host='0.0.0.0', port=5000):
         self.name = name
         self.host = host
         self.port = port
@@ -41,13 +43,97 @@ class Peer:
         self.message_limit = 10  # limit to 10 messages per window
         self.message_timestamps = deque()  # to store timestamps of sent messages
         self.dataTypes_to_modules = {}
+        print(f"Peer {self.name} created at {self.host}:{self.port}",flush=True)
+
+        self.consul = consul.Consul(host='consul', port=8500)
+        
+        loop = asyncio.get_event_loop()
+        # loop.create_task(self.register_with_consul())
+        # loop.create_task(self.start_listening())
+        # loop.create_task(self.discover_peers()) 
+        asyncio.gather(self.register_with_consul(),self.start_listening(),self.discover_peers())
+    
+        # try:
+        #     # Run the event loop
+        #     asyncio.get_event_loop().run_forever()
+        # except KeyboardInterrupt:
+        #     print("Shutting down...")
+        # finally:
+        #     print("Cleanup if needed")
+
+        # print('done')
+        
+        
 
 
         # Start listening for incoming connections
-        asyncio.create_task(self.listen_for_connections())        
+        # self.loop = asyncio.get_event_loop()
+        # self.loop.create_task(self.register_with_consul())
+        # self.loop.create_task(self.start_listening())
+        # self.loop.create_task(self.discover_peers())
+        
+    async def  continue_running(self):  
+        try:
+            # Run the event loop
+            asyncio.get_event_loop().run_forever()
+        except KeyboardInterrupt:
+            print("Shutting down...")
+        finally:
+            print("Cleanup if needed")
+            
+
+        
+    async def register_with_consul(self):
+        """Register the peer with Consul."""
+        print("lolo")
+        try:
+
+            self.consul.agent.service.register(
+                'peer',
+                service_id=self.name,
+                address=self.host,
+                port=self.port,
+                tags=['peer']
+            )
+        except Exception as e:
+            print(f"Failed to register with Consul: {e}")
+        print(f"{self.name} registered with Consul at {self.host}:{self.port}")
+
+    async def discover_peers(self):
+        """Discover other peers using Consul."""
+        while True:
+            index, services = self.consul.catalog.service('peer')
+            print(services,flush=True)
+            for service in services:
+                peer_name = service['ServiceName']
+                peer_host = service['ServiceAddress']
+                peer_port = service['ServicePort']
+
+                if peer_name != self.name and (peer_name, peer_host, peer_port) not in [(name, p_host, p_port) for name, (p_host, p_port) in self.connections.items()]:
+                    await self.connect(peer_name, peer_host, peer_port)
+                    print(f"Discovered peer for {self.name}: {peer_name} at {peer_host}:{peer_port}",flush=True)
+
+            await asyncio.sleep(20)  # Poll every 10 seconds        
+            
+    async def start_listening(self):
+       await asyncio.gather(self.listen_for_connections(), self.listen_for_modules())
+    
+        
+        
         
   
 
+    async def listen_for_modules(self):
+            handler = lambda r, w: handle_client(r, w, self.handle_modules_message)
+            server = await asyncio.start_server(handler, host=self.host,
+                                                port=12345, family=socket.AF_INET, reuse_address=True, 
+                                                reuse_port=True)
+            print(f"[+] GOSSIP mockup listening for modules on {self.host}:12345")
+
+            async with server:
+                await server.serve_forever()
+        
+    
     # def listen_for_connections(self):
     #     try:
     #         self.socket.bind((self.host, self.port))
@@ -102,10 +188,106 @@ class Peer:
                         print(f"Error handling client: {e}")           
             
 
+    async def handle_gossip_announce(buf, reader, writer):
+        raddr, rport = writer.get_extra_info('socket').getpeername()
+        header = buf[:4]
+        body = buf[4:]
+
+        msize = struct.unpack(">HH", header)[0]
+
+        if msize <= 8 or len(buf) != msize:
+            await bad_packet(reader, writer,
+                            reason='GOSSIP_ANNOUNCE with datasize = 0 received',
+                            data=buf,
+                            )
+            return False
+
+        ttl, mres, dtype = struct.unpack(">BBH", body[:4])
+        mdata = body[4:]
+        
+
+
+        print(f"[+] {raddr}:{rport} >>> GOSSIP_ANNOUNCE: ({dtype}:{mdata})")
+
+        # await gossip_to_subscribers(dtype, mdata, (reader,writer))
+        return True
+    
+    
+    async def handle_gossip_notify(buf, reader, writer):
+            raddr, rport = writer.get_extra_info('socket').getpeername()
+            header = buf[:4]
+            body = buf[4:]
+
+            msize = struct.unpack(">HH", header)[0]
+
+            if msize != 8 or msize != len(buf):
+                await bad_packet(reader, writer,
+                                reason="Invalid size for GOSSIP_NOTIFY",
+                                data=buf,
+                                )
+                return False
+
+            res, dtype = struct.unpack(">HH", body)
+            # await add_subscription((reader,writer), dtype)
+
+            print(f"[+] {raddr}:{rport} >>> GOSSIP_NOTIFY registered: ({dtype})")
+            return True
+        
+    async def handle_gossip_validation(buf, reader, writer):
+        raddr, rport = writer.get_extra_info('socket').getpeername()
+        header = buf[:4]
+        body = buf[4:]
+
+        msize = struct.unpack(">HH", header)[0]
+
+        if msize != 8 or msize != len(buf):
+            await bad_packet(reader, writer,
+                            reason="Invalid size for GOSSIP_VALIDATION",
+                            data=buf,
+                            cleanup_func=clear_state)
+            return False
+
+        mid, res, valid = struct.unpack(">HBB", body)
+        valid = True if valid > 0 else False
+
+        print(f"[+] {raddr}:{rport} >>> GOSSIP_VALIDATION: ({mid}:{valid})")
+
+        # if not await update_validation_state((reader,writer), mid, valid):
+        #     await bad_packet(reader, writer,
+        #                     reason="GOSSIP_VALIDATION for nonexisting subscription",
+        #                     data=buf,
+        #                     cleanup_func=clear_state)
+        #     return False
+
+        return True
+
+    async def handle_modules_message(self,buf, reader, writer):
+        ret = False
+        header = buf[:4]
+        body = buf[4:]
+
+        mtype = struct.unpack(">HH", header)[1]
+        if mtype == GOSSIP_ANNOUNCE:
+            ret = await self.handle_gossip_announce(buf, reader, writer)
+        elif mtype == GOSSIP_NOTIFY:
+            ret = await self.handle_gossip_notify(buf, reader, writer)
+        elif mtype == GOSSIP_NOTIFICATION:
+            await bad_packet(reader, writer,
+                            f"Received illegal GOSSIP_NOTIFICATION from client.",
+                            header)
+        elif mtype == GOSSIP_VALIDATION:
+            ret = await self.handle_gossip_validation(buf, reader, writer)
+        else:
+            await bad_packet(reader, writer,
+                            f"Unknown message type {mtype} received",
+                            header)
+        return ret
+
     
            
 
-    def connect(self, peer_name, peer_host, peer_port):
+
+    async def connect(self, peer_name, peer_host, peer_port):
         if (peer_name, peer_host, peer_port) not in [(name, p_host, p_port) for name, (p_host, p_port) in self.connections.items()]:
             try:
                 
@@ -117,7 +299,7 @@ class Peer:
 
     async def send_message(self, message, ttl):
         if not self.check_rate_limit():
-            print(f"Rate limit exceeded. Message to {recipient_host}:{recipient_port} not sent.")
+            print(f"Rate limit exceeded. Message cannot be sent.")
             return
         if len( self.connections)>0:
             try:
@@ -150,126 +332,27 @@ class Peer:
         return nanoid.generate(size=10,alphabet=message)
     
     
-    # async def handle_message(buf, reader, writer):
-    #     ret = False
-    #     header = buf[:4]
-    #     body = buf[4:]
+async def main():
+    # Read environment variables
+    name = os.getenv('PEER_NAME', 'peer')
+    host = os.getenv('HOST', '127.0.0.1')
+    port = int(os.getenv('PORT', 5000))
+    degree = int(os.getenv('DEGREE', 5))
+    cacheSize = int(os.getenv('CACHE_SIZE', 10))
 
-    #     mtype = struct.unpack(">HH", header)[1]
-    #     if mtype == GOSSIP_ANNOUNCE:
-    #         ret = await handle_gossip_announce(buf, reader, writer)
-    #     elif mtype == GOSSIP_NOTIFY:
-    #         ret = await handle_gossip_notify(buf, reader, writer)
-    #     elif mtype == GOSSIP_NOTIFICATION:
-    #         await bad_packet(reader, writer,
-    #                         f"Received illegal GOSSIP_NOTIFICATION from client.",
-    #                         header)
-    #     elif mtype == GOSSIP_VALIDATION:
-    #         ret = await handle_gossip_validation(buf, reader, writer)
-    #     else:
-    #         await bad_packet(reader, writer,
-    #                         f"Unknown message type {mtype} received",
-    #                         header)
-    #     return ret
+    peer = Peer(name=name, degree=5, cacheSize=2, host=host, port=port)
+    await asyncio.Event().wait()
+    
 
+    # try:
+    #     # Run the event loop
+    #     asyncio.get_event_loop().run_forever()
+    # except KeyboardInterrupt:
+    #     print("Shutting down...")
+    # finally:
+    #     print("Cleanup if needed")
 
+    
 
-# class Peer:
-#     def __init__(self, name, host='127.0.0.1', port=3000):
-#         self.name = name
-#         self.id = str(uuid.uuid4())  # Unique identifier for the peer
-#         self.host = host
-#         self.port = port
-#         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-#         self.connections = {}  # Dictionary to keep track of connected peers
-        
-#         self.bootstrap_host = '127.0.0.1'
-#         self.bootstrap_port = 2050
-#         self.connect_to_bootstrap_service()
-#         # Start listening for incoming connections
-#         threading.Thread(target=self.listen_for_connections, daemon=True).start()
-        
-#     def connect_to_bootstrap_service(self):
-#         try:
-#             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-#                 s.connect((self.bootstrap_host, self.bootstrap_port))
-#                 s.sendall("GET_PEERS".encode())
-#                 data = s.recv(1024).decode()
-#                 peers = json.loads(data)
-#                 print(f"Initial peers obtained: {peers}")
-#                 for peer_info in peers:
-#                     self.connect_to_peer(peer_info["host"], peer_info["port"])
-#         except Exception as e:
-#             print(f"Failed to connect to bootstrapping service: {e}")
-
-#     # def connect_to_peer(self, host, port):
-#     #     if (host, port) not in [(p.host, p.port) for p in self.connections.values()]:
-#     #         try:
-#     #             peer_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-#     #             peer_socket.connect((host, port))
-#     #             peer_name = f"{host}:{port}"  # Use a unique identifier for the peer
-#     #             self.connections[peer_name] = peer_socket
-#     #             print(f"{self.name} connected to peer at {host}:{port}")
-#     #             conn, addr = self.socket.accept()
-
-
-#     #             threading.Thread(target=self.receive_messages, args=(conn), daemon=True).start()
-#     #         except Exception as e:
-#     #             print(f"Failed to connect to peer at {host}:{port}: {e}")
-#     def connect_to_peer(self, host, port):
-#        if (host, port) not in [(p.host, p.port) for p in self.connections.values()]: 
-         
-#             try:
-#                 name = f"{host}:{port}" 
-#                 peer_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-#                 peer_socket.connect((host, port))
-#                 self.connections[name] = peer_socket
-#                 print(f"{self.name} connected to {name}")
-#             except Exception as e:
-#                 print(f"Failed to connect to {name}: {e}")
-                
-#     def connect(self, peer):
-        
-#          if peer not in self.connections:
-#             try:
-#                 peer_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-#                 peer_socket.connect((peer.host, peer.port))
-#                 self.connections[peer.name] = peer_socket
-#                 print(f"{self.name} connected to {peer.name}")
-#             except Exception as e:
-#                 print(f"Failed to connect to {peer.name}: {e}")
-                
-#     def listen_for_connections(self):
-#         try:
-#             self.socket.bind((self.host, self.port))
-#             self.socket.listen(5)
-#             print(f"{self.name} is listening on {self.host}:{self.port}")
-
-#             while True:
-#                 conn, addr = self.socket.accept()
-#                 threading.Thread(target=self.receive_messages, args=(conn,), daemon=True).start()
-#         except Exception as e:
-#             print(f"Error in listen_for_connections: {e}")
-
-#     def receive_messages(self, conn):
-#         while True:
-#             try:
-#                 data = conn.recv(1024).decode()
-#                 if data:
-#                     message, ttl = data.split("|")
-#                     print(f"{self.name} received message from : {message} with TTL:{ttl} ")
-#             except Exception as e:
-#                 print(f"Error receiving message from : {e}")
-#                 break
-#     def send_message(self, message, recipient_name,ttl):
-#         print(recipient_name)
-#         if recipient_name in self.connections:
-#             try:
-#                full_message = f"{message}|{ttl}"
-#                self.connections[recipient_name].sendall(full_message.encode())
-#             except Exception as e:
-#                 print(f"Failed to send message to {recipient_name}: {e}")
-#         else:
-#             print(f"{recipient_name} is not connected to {self.name}")
-        
-        
+if __name__ == "__main__":
+     asyncio.run(main())    
