@@ -43,7 +43,7 @@ class Peer:
         self.message_limit = 10  # limit to 10 messages per window
         self.message_timestamps = deque()  # to store timestamps of sent messages
         self.dataTypes_to_modules = {}
-        print(f"Peer {self.name} created at {self.host}:{self.port}",flush=True)
+        print(f"Peer {self.name} created at {socket.gethostbyname(self.host)}:{self.port}",flush=True)
 
         self.consul = consul.Consul(host='consul', port=8500)
         
@@ -51,7 +51,7 @@ class Peer:
         # loop.create_task(self.register_with_consul())
         # loop.create_task(self.start_listening())
         # loop.create_task(self.discover_peers()) 
-        asyncio.gather(self.register_with_consul(),self.start_listening(),self.discover_peers())
+        asyncio.gather(self.register_with_consul(),self.listen_for_connections(),self.listen_for_modules(),self.discover_peers())
     
         # try:
         #     # Run the event loop
@@ -103,15 +103,23 @@ class Peer:
         """Discover other peers using Consul."""
         while True:
             index, services = self.consul.catalog.service('peer')
-            print(services,flush=True)
             for service in services:
+                print(f"Service: {service}",flush=True)
                 peer_name = service['ServiceName']
                 peer_host = service['ServiceAddress']
                 peer_port = service['ServicePort']
+                
 
-                if peer_name != self.name and (peer_name, peer_host, peer_port) not in [(name, p_host, p_port) for name, (p_host, p_port) in self.connections.items()]:
-                    await self.connect(peer_name, peer_host, peer_port)
-                    print(f"Discovered peer for {self.name}: {peer_name} at {peer_host}:{peer_port}",flush=True)
+                await self.connect(peer_name, peer_host, peer_port)
+                print("connected",flush=True)
+                try:
+                 await self.send_message(message=1, ttl=2)
+                except Exception as e:
+                    print(f"Failed to send message to {peer_name} at {peer_host}:{peer_port}: {e}")
+                
+                # await asyncio.sleep(0.5)
+                print("sent",flush=True)
+                # print(f"Discovered peer for {self.name}: {peer_name} at {peer_host}:{peer_port}",flush=True)
 
             await asyncio.sleep(20)  # Poll every 10 seconds        
             
@@ -149,7 +157,7 @@ class Peer:
     
     async def listen_for_connections(self):
         self.socket.bind((self.host, self.port))
-        print(f"{self.name} is listening on {self.host}:{self.port}")
+        print(f"{self.name} is listening on {self.host}:{self.port}",flush=True)
 
         while True:
             try:
@@ -181,7 +189,7 @@ class Peer:
                     try:
                         
                         message, ttl = data.split("|")
-                        print(f"{self.name} received message: {message} with TTL: {ttl}")
+                        print(f"{self.name} received message: {message} with TTL: {ttl}",flush=True)
                     except ValueError:
                         print(f"Received malformed message: {data}")
         except Exception as e:
@@ -298,16 +306,19 @@ class Peer:
                 print(f"Failed to connect to peer {peer_name} at {peer_host}:{peer_port}: {e}")
 
     async def send_message(self, message, ttl):
+        print("sending message",flush=True)
         if not self.check_rate_limit():
             print(f"Rate limit exceeded. Message cannot be sent.")
             return
         if len( self.connections)>0:
             try:
                 for peer_name, (recipient_host, recipient_port) in self.connections.items():
+                    host =socket.gethostbyname(recipient_host)
+                    print(f"host:{host}")
                     full_message = f"{message}|{ttl}"
-                    self.socket.sendto(full_message.encode(), (recipient_host, recipient_port))
+                    self.socket.sendto(full_message.encode(), (host, recipient_port))
 
-                    print(f"{self.name} sent message to {recipient_host}:{recipient_port}: {message} with TTL: {ttl}")
+                    print(f"{self.name} sent message to {recipient_host}:{recipient_port}: {message} with TTL: {ttl}",flush=True)
                     self.message_timestamps.append(time.time())
 
             except Exception as e:
