@@ -8,10 +8,14 @@ import time
 import random
 from collections import deque
 import asyncio
-import nanoid
 import struct
 import consul
 import os
+import uuid
+import cryptography
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+import base64
 
 
 GOSSIP_ANNOUNCE = 500
@@ -28,7 +32,7 @@ from util import bad_packet, read_message, handle_client
 
 
 class Peer:
-    def __init__(self, name,degree=5,cacheSize=10, host='0.0.0.0', port=5000):
+    def __init__(self, name,degree=5,cacheSize=10, host='0.0.0.0', port=7000):
         self.name = name
         self.host = host
         self.port = port
@@ -36,6 +40,11 @@ class Peer:
         self.cacheSize=cacheSize
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.setblocking(False)
+        self.private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+        )
+        self.public_key = self.private_key.public_key()
 
         self.connections = {}  # Dictionary to store connected peers
         self.degree=degree
@@ -43,6 +52,8 @@ class Peer:
         self.message_limit = 10  # limit to 10 messages per window
         self.message_timestamps = deque()  # to store timestamps of sent messages
         self.dataTypes_to_modules = {}
+        self.mids = []
+        self.known_peers_publicKeys={}
         print(f"Peer {self.name} created at {socket.gethostbyname(self.host)}:{self.port}",flush=True)
 
         self.consul = consul.Consul(host='consul', port=8500)
@@ -82,52 +93,143 @@ class Peer:
             print("Cleanup if needed")
             
 
-        
+    def get_public_key_pem(self):
+        """
+        Returns the PEM-encoded representation of the peer's public key.
+        """
+        return self.public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo 
+
+
+        )
+
+    def get_public_key_base64(self):
+        """
+        Returns the Base64-encoded representation of the peer's public key.
+        """
+        pem_data = self.get_public_key_pem()
+        return base64.b64encode(pem_data).decode('utf-8')   
+    
+    def load_public_key_from_base64(self, base64_key):
+        """
+        Loads a public key from its Base64-encoded representation.
+        """
+        pem_data = base64.b64decode(base64_key.encode('utf-8'))
+        return serialization.load_pem_public_key(pem_data)
+    
+    
+    def sign_message(self, message):
+        """
+        Signs a message using the peer's private key.
+        """
+        signature = self.private_key.sign(
+            message.encode(),
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
+        )
+        return signature
+
+    def verify_signature(self, message, signature, sender_public_key):
+        """
+        Verifies the signature of a message using the sender's public key.
+        """
+        try:
+                    sender_public_key.verify(
+                    signature,
+                    message.encode(),  # The message must be encoded to bytes
+                    padding.PSS(
+                        mgf=padding.MGF1(hashes.SHA256()),
+                        salt_length=padding.PSS.MAX_LENGTH
+                    ),
+                    hashes.SHA256()
+                )
+                    print("Signature verification successful",flush=True)
+                    return True
+        # If no exception was raised, the signature is valid
+         
+           
+        except Exception as e:
+        # If an exception is raised, the signature is invalid
+            print(f"Signature verification failed: {e}")
+            return False
+    
     async def register_with_consul(self):
         """Register the peer with Consul."""
-        print("lolo")
         try:
+            print(self.public_key,flush=True)
 
             self.consul.agent.service.register(
                 'peer',
                 service_id=self.name,
                 address=self.host,
                 port=self.port,
+               
                 tags=['peer']
             )
+
         except Exception as e:
             print(f"Failed to register with Consul: {e}")
         print(f"{self.name} registered with Consul at {self.host}:{self.port}")
+        
+        
+        
 
     async def discover_peers(self):
         """Discover other peers using Consul."""
-        while True:
-            index, services = self.consul.catalog.service('peer')
-            for service in services:
-                print(f"Service: {service}",flush=True)
-                peer_name = service['ServiceName']
-                peer_host = service['ServiceAddress']
-                peer_port = service['ServicePort']
-                
+        if await self.perform_pow():
+            while True:
+                index, services = self.consul.catalog.service('peer')
+                for service in services:
+                    peer_name = service['ServiceName']
+                    peer_host = service['ServiceAddress']
+                    peer_port = service['ServicePort']
+                    print("hehehe",flush=True)
+                    
+                    
+                    
 
-                await self.connect(peer_name, peer_host, peer_port)
-                print("connected",flush=True)
-                try:
-                 await self.send_message(message=1, ttl=2)
-                except Exception as e:
-                    print(f"Failed to send message to {peer_name} at {peer_host}:{peer_port}: {e}")
-                
-                # await asyncio.sleep(0.5)
-                print("sent",flush=True)
-                # print(f"Discovered peer for {self.name}: {peer_name} at {peer_host}:{peer_port}",flush=True)
+                    
+                    
+                    
 
-            await asyncio.sleep(20)  # Poll every 10 seconds        
+                    await self.connect(peer_name, peer_host, peer_port)
+                    # try:
+                    #  await self.send_message(message=1, ttl=2)
+                    #  print(self.connections,flush=True)
+                    # except Exception as e:
+                    #     print(f"Failed to send message to {peer_name} at {peer_host}:{peer_port}: {e}")
+                    
+                    # await asyncio.sleep(0.5)
+                    # print(f"Discovered peer for {self.name}: {peer_name} at {peer_host}:{peer_port}",flush=True)
+
+                await asyncio.sleep(10)  # Poll every 10 seconds 
+                print("20 seconds check ",flush=True)       
             
     async def start_listening(self):
        await asyncio.gather(self.listen_for_connections(), self.listen_for_modules())
     
         
-        
+    async def perform_pow(self):
+        """Performs a simple Proof of Work challenge."""
+        difficulty = 0  # Adjust the difficulty as needed
+        challenge = os.urandom(16).hex()  # Generate a random challenge
+        print(f"Performing Proof of Work with challenge: {challenge}")
+
+        start_time = time.time()
+        while True:
+            nonce = random.randint(0, 2**32 - 1)
+            attempt = hashlib.sha256(f"{challenge}{nonce}".encode()).hexdigest()
+            if attempt.startswith('0' * difficulty):  # Check if the hash meets the difficulty
+                elapsed_time = time.time() - start_time
+                print(f"Solved challenge in {elapsed_time:.2f} seconds with nonce: {nonce}")
+                return True  # Proof of Work successful
+
+            await asyncio.sleep(0.01)  # Avoid blocking the event loop
+   
         
   
 
@@ -142,18 +244,7 @@ class Peer:
                 await server.serve_forever()
         
     
-    # def listen_for_connections(self):
-    #     try:
-    #         self.socket.bind((self.host, self.port))
-    #         print(f"{self.name} is listening on {self.host}:{self.port}")
-
-    #         while True:
-    #             conn, addr = self.socket.recvfrom(1024)
-    #             threading.Thread(target=self.handle_client, args=(conn,), daemon=True).start()
-                
-            
-    #     except Exception as e:
-    #         print(f"Error in listen_for_connections: {e}")
+    
     
     async def listen_for_connections(self):
         self.socket.bind((self.host, self.port))
@@ -163,40 +254,107 @@ class Peer:
             try:
                 conn, addr = await asyncio.get_event_loop().run_in_executor(None, self.socket.recvfrom, 1024)
                 print(f"Received data from {addr}:")  # Print received data for debugging
-                asyncio.create_task(self.handle_message(conn,))
+                asyncio.create_task(self.handle_message(conn,addr))
             except BlockingIOError:
                 await asyncio.sleep(0.1)
 
 
-    # def handle_client(self, conn):
-      
-    #         try:
-    #             data = conn.decode()
-    #             if data:
-    #                 try:
-    #                     message, ttl = data.split("|")
-    #                     print(f"{self.name} received message: {message} with TTL: {ttl}")
-    #                 except ValueError:
-    #                     print(f"Received malformed message: {data}")
-    #         except Exception as e:
-    #             print(f"Error handling client: {e}")
+  
     
-    async def handle_message(self, conn):
+    async def handle_message(self, conn,address):
         try:
              # Deserialize using your Message class
             data=conn.decode()
+            
+            sender_host, sender_port = address
             if data:
                     try:
                         
-                        message, ttl = data.split("|")
-                        print(f"{self.name} received message: {message} with TTL: {ttl}",flush=True)
+                        parts = data.split("|&",4)
+                        print(parts,flush=True)
+                        if len(parts) == 5:
+                            mid, message, dtype, ttl, sig = parts
+                             # Decode the signature from base64
+                        else:
+                            # Handle the case where the message is still malformed even after the adjustment
+                            print("Error: Message is still malformed"
+                        )
+                        escaped_sig = base64.b64decode(sig.encode('utf-8'))
+                        if mid!="100":
+                            
+                            sender_public_key=self.known_peers_publicKeys[sender_host]
+                            if  not self.verify_signature(message,escaped_sig,sender_public_key):
+                                
+                                print("Invalid signature",flush=True)
+                                return
+                            
+                        if mid=="100":
+                            if sender_host not in self.known_peers_publicKeys:
+                                self.known_peers_publicKeys[sender_host]=self.load_public_key_from_base64(message)
+                                print(self.known_peers_publicKeys,flush=True)
+                                print(f"public key received from {mid} is {message}")
+                                await self.send_public_key(sender_host,sender_port)
+                                
+                        else:
+                            
+                                ttl = int(ttl)
+                                if ttl > 0 and mid not in self.mids:
+                                    self.mids.append(mid)
+                                    ttl -= 1
+                                    await self.send_message(message, mid,dtype, ttl)
+                                    print("ego",flush=True)
+                                    print(message,dtype,mid,flush=True)
+                                    await self.send_to_modules(message,dtype,mid)
+                                    print(f"{self.name} received message: {message} with TTL: {ttl}, {dtype}",flush=True)
+
                     except ValueError:
                         print(f"Received malformed message: {data}")
         except Exception as e:
                         print(f"Error handling client: {e}")           
             
+    
+    async def send_to_modules(self, data, dtype, mid):
+       print(dtype,flush=True)
+       print("in this")
+       print(self.dataTypes_to_modules,flush=True)
+       dtype=int(dtype)
+       
+       if dtype in self.dataTypes_to_modules:
+        
+        
+            for conn in self.dataTypes_to_modules[dtype]:
+                try:
+                    reader, writer = conn
+                    raddr, rport = writer.get_extra_info('socket').getpeername()
 
-    async def handle_gossip_announce(buf, reader, writer):
+                    mid = random.randint(0, 65535)
+                    msize = 8 + len(data)
+                    msg = struct.pack(">HHHH",
+                                    msize,
+                                    GOSSIP_NOTIFICATION,
+                                    mid,
+                                    dtype)
+                    msg += data
+                    
+                    print("to be sent to modukles",flush=True)
+                    print(data,flush=True)
+
+                    await writer.drain()
+                    if not writer.is_closing():
+                        writer.write(msg)
+                        await writer.drain()
+                        print(f"[+] {raddr}:{rport} <<< GOSSIP_NOTIFICATION("
+                            + f"{mid}, {dtype}, {data})")
+                    
+                    
+                except Exception as e:
+                                print(f"Failed to send message to module: {e}")
+         
+       else:
+           print(f"No subscribers for data type {dtype}")
+                            
+                            
+    async def handle_gossip_announce(self,buf, reader, writer):
         raddr, rport = writer.get_extra_info('socket').getpeername()
         header = buf[:4]
         body = buf[4:]
@@ -211,7 +369,12 @@ class Peer:
             return False
 
         ttl, mres, dtype = struct.unpack(">BBH", body[:4])
-        mdata = body[4:]
+        mdata = body[4:].decode('utf-8')
+
+        mid = self.generate_message_id()
+        self.mids.append(mid)
+        await  self.send_message(mdata, mid,dtype, ttl)
+        
         
 
 
@@ -221,7 +384,7 @@ class Peer:
         return True
     
     
-    async def handle_gossip_notify(buf, reader, writer):
+    async def handle_gossip_notify(self,buf, reader, writer):
             raddr, rport = writer.get_extra_info('socket').getpeername()
             header = buf[:4]
             body = buf[4:]
@@ -236,12 +399,19 @@ class Peer:
                 return False
 
             res, dtype = struct.unpack(">HH", body)
-            # await add_subscription((reader,writer), dtype)
+            await self.add_subscription((reader,writer), dtype)
 
             print(f"[+] {raddr}:{rport} >>> GOSSIP_NOTIFY registered: ({dtype})")
             return True
-        
-    async def handle_gossip_validation(buf, reader, writer):
+     
+    async def add_subscription(self, conn, dtype):
+        dtype=int(dtype)
+        if dtype not in self.dataTypes_to_modules:
+            self.dataTypes_to_modules[dtype] = []  # Initialize an empty list for new data types
+
+        if conn not in self.dataTypes_to_modules[dtype]:
+            self.dataTypes_to_modules[dtype].append(conn) 
+    async def handle_gossip_validation(self,buf, reader, writer):
         raddr, rport = writer.get_extra_info('socket').getpeername()
         header = buf[:4]
         body = buf[4:]
@@ -252,7 +422,7 @@ class Peer:
             await bad_packet(reader, writer,
                             reason="Invalid size for GOSSIP_VALIDATION",
                             data=buf,
-                            cleanup_func=clear_state)
+                            )
             return False
 
         mid, res, valid = struct.unpack(">HBB", body)
@@ -273,8 +443,11 @@ class Peer:
         ret = False
         header = buf[:4]
         body = buf[4:]
+       
 
         mtype = struct.unpack(">HH", header)[1]
+        print(" got sooooooooooooooooomething ",flush=True)
+        print(mtype,flush=True)
         if mtype == GOSSIP_ANNOUNCE:
             ret = await self.handle_gossip_announce(buf, reader, writer)
         elif mtype == GOSSIP_NOTIFY:
@@ -296,27 +469,32 @@ class Peer:
 
 
     async def connect(self, peer_name, peer_host, peer_port):
-        if (peer_name, peer_host, peer_port) not in [(name, p_host, p_port) for name, (p_host, p_port) in self.connections.items()]:
-            try:
-                
-                self.connections[peer_name] = (peer_host, peer_port)
-                print(f"{self.name} connected to peer: {peer_name} at {peer_host}:{peer_port}")
+        if peer_host != self.host:
+            if (peer_host, peer_host, peer_port) not in [(name, p_host, p_port) for name, (p_host, p_port) in self.connections.items()]:
+                try:
+                    
+                    self.connections[peer_host] = (peer_host, peer_port)
+                    await self.send_public_key(peer_host,peer_port)
+                    print(f"{[self.host]} connected to peer: {peer_host} at {socket.gethostbyname(peer_host)}:{peer_port}")
 
-            except Exception as e:
-                print(f"Failed to connect to peer {peer_name} at {peer_host}:{peer_port}: {e}")
+                except Exception as e:
+                    print(f"Failed to connect to peer {peer_name} at {peer_host}:{peer_port}: {e}")
 
-    async def send_message(self, message, ttl):
-        print("sending message",flush=True)
+    async def send_message(self, message,mid,dtype, ttl):
         if not self.check_rate_limit():
             print(f"Rate limit exceeded. Message cannot be sent.")
             return
+        
+        sig=self.sign_message(message)
+        escaped_sig = base64.b64encode(sig).decode('utf-8')
+
         if len( self.connections)>0:
             try:
                 for peer_name, (recipient_host, recipient_port) in self.connections.items():
                     host =socket.gethostbyname(recipient_host)
-                    print(f"host:{host}")
-                    full_message = f"{message}|{ttl}"
-                    self.socket.sendto(full_message.encode(), (host, recipient_port))
+                    
+                    full_message = f"{mid}|&{message}|&{dtype}|&{ttl}|&{escaped_sig}"
+                    self.socket.sendto(full_message.encode(), (recipient_host, recipient_port))
 
                     print(f"{self.name} sent message to {recipient_host}:{recipient_port}: {message} with TTL: {ttl}",flush=True)
                     self.message_timestamps.append(time.time())
@@ -325,6 +503,24 @@ class Peer:
                 print(f"Failed to send message to {recipient_port}: {e}")
         else:
             print(f"Peer {recipient_port} is not connected to {self.name}")
+            
+    async def send_public_key(self, reciepient_host,recipient_port):
+        try:
+            public_key = self.get_public_key_base64()
+            mid = 100
+            message=self.get_public_key_base64()
+            dtype=999
+            ttl=0
+            sig=self.sign_message(message)
+            escaped_sig = base64.b64encode(sig).decode('utf-8')
+            
+            print("okaaaay",flush=True)
+            full_message = f"{mid}|&{message}|&{dtype}|&{ttl}|&{escaped_sig}"
+            self.socket.sendto(full_message.encode(), (reciepient_host, recipient_port))
+            await asyncio.sleep(0.5)
+            print(f"{self.name} sent {self.load_public_key_from_base64(self.get_public_key_base64())} {reciepient_host}:{recipient_port}")
+        except Exception as e:
+            print(f"Failed to send public key to {reciepient_host}:{recipient_port}: {e}")
             
     def check_rate_limit(self):
         current_time = time.time()
@@ -339,8 +535,10 @@ class Peer:
             print(f"Rate limit exceeded. Message not sent.")
             return False
         
-    def generate_mid(message):
-        return nanoid.generate(size=10,alphabet=message)
+    def generate_message_id(self):
+        return  uuid.uuid4()
+        
+    
     
     
 async def main():

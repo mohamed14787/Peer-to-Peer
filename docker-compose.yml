@@ -16,10 +16,13 @@ services:
       - PORT=2000
       - CONSUL_HOST=consul
       - CONSUL_PORT=8500
+
     networks:
       - mynetwork
     depends_on:
       - consul
+    ports:
+      - "2345:12345"
 
   peer2:
     build: .
@@ -33,6 +36,8 @@ services:
       - mynetwork
     depends_on:
       - consul
+    ports:
+      - "2245:12345"
 
   peer3:
     build: .

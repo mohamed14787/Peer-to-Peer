@@ -139,16 +139,18 @@ async def send_gossip_notification(conn, dtype, data):
                       mid,
                       dtype)
     msg += data
+    print("hello")
+    print(conn)
 
-    await writer.drain()
-    if not writer.is_closing():
-        writer.write(msg)
-        await writer.drain()
-        print(f"[+] {raddr}:{rport} <<< GOSSIP_NOTIFICATION("
-              + f"{mid}, {dtype}, {data})")
-        await add_mid(conn, mid, dtype)
-    else:
-        await bad_packet(reader, writer, cleanup_func=clear_state)
+    # await writer.drain()
+    # if not writer.is_closing():
+    #     writer.write(msg)
+    #     await writer.drain()
+    #     print(f"[+] {raddr}:{rport} <<< GOSSIP_NOTIFICATION("
+    #           + f"{mid}, {dtype}, {data})")
+    #     await add_mid(conn, mid, dtype)
+    # else:
+    #     await bad_packet(reader, writer, cleanup_func=clear_state)
 
 async def gossip_to_subscribers(dtype, data, originator):
     subs = await get_subscribers_of(dtype)

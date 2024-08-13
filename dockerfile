@@ -11,7 +11,7 @@ COPY . .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Make port 5000 available to the world outside this container
-EXPOSE 5000
+EXPOSE 12345
 
 # Define environment variables
 ENV HOST=0.0.0.0
@@ -20,4 +20,4 @@ ENV CONSUL_HOST=consul
 ENV CONSUL_PORT=8500
 
 # Run peer.py when the container launches
-CMD ["python", "./peer.py"]
+CMD ["sh", "-c", "python peer.py "]
